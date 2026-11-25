@@ -12,18 +12,23 @@ const fixture = await loadFixture({
 	entryPoint: "server/runtime/queue.ts",
 	mocks: {
 		"@/lib/aws/sqs": `
-			const state = (globalThis.__sqsQueue = globalThis.__sqsQueue ?? { script: [], parked: [], sends: [], deleted: [], visibility: [], receives: [] });
-			export async function sqsSendMessage(config, opts) { state.sends.push(opts); return { messageId: "m-1" }; }
-			export async function sqsSendMessageBatch(config, opts) { state.sends.push(opts); return { successful: [], failed: [] }; }
+			// Read the state object per call (not captured at module-eval time):
+			// the tests' reset() installs a fresh object per test, and the mock
+			// must always observe the current one (same harness fix as
+			// tests/aws-s3-config.test.mjs, dcd3210).
+			const state = () => (globalThis.__sqsQueue = globalThis.__sqsQueue ?? { script: [], parked: [], sends: [], deleted: [], visibility: [], receives: [] });
+			export async function sqsSendMessage(config, opts) { state().sends.push(opts); return { messageId: "m-1" }; }
+			export async function sqsSendMessageBatch(config, opts) { state().sends.push(opts); return { successful: [], failed: [] }; }
 			export async function sqsReceiveMessage(config, opts) {
-				state.receives.push(opts);
-				const next = state.script.shift();
-				if (!next) return new Promise((resolve) => state.parked.push(resolve));
+				const current = state();
+				current.receives.push(opts);
+				const next = current.script.shift();
+				if (!next) return new Promise((resolve) => current.parked.push(resolve));
 				if (next.error) throw next.error;
 				return next.value;
 			}
-			export async function sqsDeleteMessage(config, opts) { state.deleted.push(opts); }
-			export async function sqsChangeMessageVisibility(config, opts) { state.visibility.push(opts); }
+			export async function sqsDeleteMessage(config, opts) { state().deleted.push(opts); }
+			export async function sqsChangeMessageVisibility(config, opts) { state().visibility.push(opts); }
 		`,
 	},
 });
