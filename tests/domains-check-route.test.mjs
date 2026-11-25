@@ -11,11 +11,12 @@ const realFetch = globalThis.fetch;
 after(() => { rmSync(temporary, { recursive: true, force: true }); delete globalThis.checkEnv; globalThis.fetch = realFetch; });
 const mocks = {
 	"@/lib/cloudflare": "export function getEnv(){return globalThis.checkEnv}",
+	"@/lib/aws/config": "export async function getAwsConfig(){return null} export async function requireAwsConfig(){throw new Error('aws config unavailable')}",
 	"@/lib/auth/cookies": "export async function requireUser(){return {id:'user'}}",
 	"next/server": "export const NextResponse = { json: (body, init) => Response.json(body, init) }",
 };
 await build({ entryPoints: [join(project, "src/app/api/domains/check/route.ts")], outfile: join(temporary, "route.mjs"), bundle: true, platform: "node", format: "esm", packages: "external", alias: { "@": join(project, "src") }, logLevel: "silent", plugins: [{ name: "route-fixtures", setup(builder) {
-	builder.onResolve({ filter: /^@\/lib\/(cloudflare|auth\/cookies)$|^next\/server$/ }, args => ({ path: args.path, namespace: "mock" }));
+	builder.onResolve({ filter: /^@\/lib\/(cloudflare|auth\/cookies|aws\/config)$|^next\/server$/ }, args => ({ path: args.path, namespace: "mock" }));
 	builder.onLoad({ filter: /.*/, namespace: "mock" }, args => ({ contents: mocks[args.path], loader: "js" }));
 } }] });
 const { POST } = await import(pathToFileURL(join(temporary, "route.mjs")).href);
