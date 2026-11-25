@@ -10,11 +10,14 @@ const fixture = await loadFixture({
 	entryPoint: "src/lib/storage/b2-config.ts",
 	mocks: {
 		"@/lib/aws/config": `
-			const state = (globalThis.__s3config = globalThis.__s3config ?? {
-				calls: 0,
-				result: { accessKeyId: "AKITASK", secretAccessKey: "task-secret", region: "us-east-1", sessionToken: "task-token" },
-			});
-			export async function getAwsConfig(env) { state.calls += 1; return state.result; }
+			// Read the state object per call (not captured at module-eval time):
+			// the tests' reset() installs a fresh object, and the mock must
+			// always observe the current one (the fixtures.mjs indirection pattern).
+			export async function getAwsConfig(env) {
+				const state = (globalThis.__s3config = globalThis.__s3config ?? { calls: 0, result: null });
+				state.calls += 1;
+				return state.result;
+			}
 		`,
 	},
 });
