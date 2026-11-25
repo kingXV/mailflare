@@ -10,6 +10,7 @@
     "lint": "vp lint .",
     "deploy": "npm run build && npm run deploy:worker",
     "deploy:worker": "wrangler deploy",
+    "aws:synth": "npm --prefix deploy/aws run synth",
     "deploy:local": "npm run deploy",
     "upload": "npm run build && wrangler versions upload",
     "preview": "npm run build && vp preview --port 3000",
