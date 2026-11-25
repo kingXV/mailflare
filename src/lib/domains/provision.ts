@@ -13,6 +13,8 @@ import type { DomainProvisioningChanges, DomainProvisioningResult } from "@/lib/
 import { removeMxRecords } from "@/lib/domains/mx-records";
 import { rollbackDomainProvisioning } from "@/lib/domains/rollback";
 import { ensureSendingSubdomain } from "@/lib/domains/sending-subdomain";
+import { getAwsConfig } from "@/lib/aws/config";
+import { findRoute53ZoneByHostname } from "@/lib/aws/route53";
 
 /** Node/Docker has no Email Worker; a catch-all PUT to one 404s (CF 2016). */
 export function shouldBindEmailCatchAllToWorker(
@@ -39,6 +41,31 @@ export async function provisionDomainOnCloudflare(
 ): Promise<DomainProvisioningResult> {
 	const normalized = normalizeHostname(hostname);
 	if (options?.skipDns || !hasCloudflareCredentials(env)) {
+		if (!options?.skipDns) {
+			// Without Cloudflare, an AWS install can still own the zone's DNS:
+			// record the Route 53 hosted zone instead of "manual" so DNS pages and
+			// provider setup target Route 53.
+			const awsConfig = await getAwsConfig(env);
+			if (awsConfig) {
+				const zone = await findRoute53ZoneByHostname(awsConfig, normalized);
+				if (zone) {
+					// Route 53 has no Email Routing or sending subdomain equivalent here:
+					// records are written through the app's Route 53 seam, so there is
+					// nothing to provision. Changes stay empty (rollback is Cloudflare-only).
+					return {
+						hostname: normalized,
+						zone: { id: `r53:${zone.id}`, name: normalized },
+						// Mail arrives whenever MX points at this server, so the domain is live at once.
+						routingEnabled: options?.enableRouting ?? true,
+						sendingRequested: options?.enableSending ?? true,
+						sendingEnabled: false,
+						sendingSubdomainTag: null,
+						routingStatus: "route53",
+						changes: { zoneId: `r53:${zone.id}`, enabledEmailRouting: false, createdSendingSubdomainTag: null, previousCatchAll: null, createdAddressRules: [], deletedMxRecords: [] },
+					};
+				}
+			}
+		}
 		// Nothing to provision: the operator points MX at this server themselves,
 		// or chose to skip DNS for now.
 		return {

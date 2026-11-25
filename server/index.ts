@@ -13,11 +13,12 @@ import { processImportJob } from "@/lib/import/jobs";
 import { handleDavRequest, isDavPath } from "@/lib/dav/handler";
 import { guardMtaStsHost, hostnameOf, isMtaStsHost } from "@/lib/deliverability/mta-sts";
 import { applyPendingMigrations } from "@/lib/migrations/service";
-import { isImportJobMessage, isInboundQueueMessage, isWebhookRetryMessage } from "../worker-utils";
+import { isImportJobMessage, isInboundQueueMessage, isWebhookRetryMessage, settleFailedInboundMessage } from "../worker-utils";
 import { createNodeRuntime } from "./runtime/env";
 import { isRealtimeOriginAllowed } from "./runtime/realtime-origin";
 import { serveFetch } from "./runtime/fetch-adapter";
 import { applyMigrations } from "./runtime/migrate";
+import type { SqsMessageMeta } from "./runtime/queue";
 import { startScheduler } from "./runtime/scheduler";
 import { startSmtpListener } from "./runtime/smtp";
 
@@ -39,12 +40,21 @@ async function main() {
 		: (await applyPendingMigrations(env.DB)).applied;
 	if (migrated.length) console.log(`Applied ${migrated.length} migration(s): ${migrated.join(", ")}`);
 
-	runtime.inboundQueue.setConsumer(async (body) => {
-		if (isInboundQueueMessage(body)) await processInboundMessage(env, body);
+	runtime.inboundQueue.setConsumer(async (body: unknown, meta?: SqsMessageMeta) => {
+		if (!isInboundQueueMessage(body)) return;
+		try {
+			await processInboundMessage(env, body);
+		} catch (error) {
+			// SQS settles here (10s, or 300s while the schema lags a migration); a
+			// rethrow would make the SQS loop double-retry. In-process queues call
+			// the consumer without meta and keep their own throw-and-retry path.
+			if (meta) settleFailedInboundMessage(meta, error);
+			else throw error;
+		}
 	});
-	runtime.outboundQueue.setConsumer(async (body) => {
+	runtime.outboundQueue.setConsumer(async (body: unknown, meta?: SqsMessageMeta) => {
 		if (isWebhookRetryMessage(body)) await processWebhookRetry(env, body as WebhookRetryMessage);
-		else if (isImportJobMessage(body)) await processImportJob(env, body);
+		else if (isImportJobMessage(body)) await processImportJob(env, meta ? { ...body, attempt: meta.attempts } : body);
 		else await processOutboundQueue(env, body as OutboundQueueMessage);
 	});
 	runtime.agentQueue.setConsumer(async (body) => {
@@ -143,10 +153,11 @@ async function main() {
 
 	const shutdown = () => {
 		stopScheduler();
-		runtime.inboundQueue.stop();
-		runtime.outboundQueue.stop();
-		runtime.agentQueue.stop();
-		server.close(() => process.exit(0));
+		// SQS-backed queues' stop() resolves once the receive loop drains the
+		// in-flight batch; the five-second exit cap below bounds a stuck consumer.
+		void Promise.all([runtime.inboundQueue, runtime.outboundQueue, runtime.agentQueue].map((queue) => queue.stop()))
+			.catch(() => {})
+			.finally(() => server.close(() => process.exit(0)));
 		setTimeout(() => process.exit(0), 5000).unref();
 	};
 	process.on("SIGTERM", shutdown);

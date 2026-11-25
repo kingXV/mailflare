@@ -1,5 +1,6 @@
 import { AwsError } from "@/lib/aws/client";
 import { isValidRegion, SES_RECEIVING_REGIONS } from "@/lib/aws/config";
+import { findRoute53ZoneByHostname } from "@/lib/aws/route53";
 import { describeActiveRuleSet, getSesAccount } from "@/lib/aws/ses";
 import { listBuckets } from "@/lib/aws/s3";
 import { listTopics } from "@/lib/aws/sns";
@@ -17,12 +18,15 @@ async function probe(run: () => Promise<unknown>): Promise<boolean> {
 /** Thrown for credentials AWS refuses outright, as opposed to missing permissions. */
 export class AwsCredentialsError extends Error {}
 
+/** The capability report plus the Route 53 probe result; the shared report type stays minimal. */
+export type AwsCapabilityReportWithRoute53 = AwsCapabilityReport & { route53: boolean };
+
 /**
  * Checks the credentials really belong to an account, then probes each service
  * Mailflare needs with a harmless read, so missing permissions are reported up
  * front instead of halfway through a setup.
  */
-export async function validateAwsConfig(config: AwsConfig): Promise<AwsCapabilityReport> {
+export async function validateAwsConfig(config: AwsConfig): Promise<AwsCapabilityReportWithRoute53> {
 	if (!isValidRegion(config.region)) throw new AwsCredentialsError(`"${config.region}" is not a valid AWS region`);
 	let identity: { accountId: string; arn: string };
 	try {
@@ -49,8 +53,11 @@ export async function validateAwsConfig(config: AwsConfig): Promise<AwsCapabilit
 	if (!sns) missing.push("sns:CreateTopic", "sns:Subscribe", "sns:SetTopicAttributes");
 	const s3 = await probe(() => listBuckets(config));
 	if (!s3) missing.push("s3:CreateBucket", "s3:PutBucketPolicy", "s3:GetObject", "s3:DeleteObject");
+	// One ListHostedZonesByName read against a reserved domain is enough to prove the zone permissions.
+	const route53 = await probe(() => findRoute53ZoneByHostname(config, "example.com"));
+	if (!route53) missing.push("route53:ListHostedZones", "route53:ListHostedZonesByName", "route53:GetHostedZone", "route53:ListResourceRecordSets", "route53:ChangeResourceRecordSets");
 
-	return { ...identity, region: config.region, sending, productionAccess, receivingRegion, receiving, sns, s3, missing };
+	return { ...identity, region: config.region, sending, productionAccess, receivingRegion, receiving, sns, s3, route53, missing };
 }
 
 /** The IAM policy that grants everything Mailflare does, for the admin to attach. */
@@ -61,5 +68,6 @@ export const AWS_IAM_POLICY = {
 		{ Effect: "Allow", Action: ["ses:DescribeActiveReceiptRuleSet", "ses:CreateReceiptRuleSet", "ses:SetActiveReceiptRuleSet", "ses:CreateReceiptRule", "ses:UpdateReceiptRule", "ses:DescribeReceiptRule", "ses:DeleteReceiptRule"], Resource: "*" },
 		{ Effect: "Allow", Action: ["sns:ListTopics", "sns:CreateTopic", "sns:SetTopicAttributes", "sns:Subscribe", "sns:ListSubscriptionsByTopic"], Resource: "*" },
 		{ Effect: "Allow", Action: ["s3:ListAllMyBuckets", "s3:CreateBucket", "s3:PutBucketPolicy", "s3:PutLifecycleConfiguration", "s3:ListBucket", "s3:GetObject", "s3:DeleteObject"], Resource: "*" },
+		{ Effect: "Allow", Action: ["route53:ListHostedZones", "route53:ListHostedZonesByName", "route53:GetHostedZone", "route53:ListResourceRecordSets", "route53:ChangeResourceRecordSets"], Resource: "*" },
 	],
 };

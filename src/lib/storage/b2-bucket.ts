@@ -81,17 +81,20 @@ export class B2Object {
 }
 
 export class B2Bucket {
-	private readonly credentials: AwsConfig;
 	private readonly host: string;
 
 	constructor(private readonly config: B2Config) {
-		this.credentials = { accessKeyId: config.keyId, secretAccessKey: config.applicationKey, region: config.region };
 		this.host = `${config.bucket}.${config.endpoint}`;
 	}
 
-	private request(key: string | null, init: { method?: string; query?: Record<string, string>; body?: string | ArrayBuffer; headers?: Record<string, string> } = {}) {
+	private async credentials(): Promise<AwsConfig> {
+		if (this.config.credentialsProvider) return this.config.credentialsProvider();
+		return { accessKeyId: this.config.keyId, secretAccessKey: this.config.applicationKey, region: this.config.region };
+	}
+
+	private async request(key: string | null, init: { method?: string; query?: Record<string, string>; body?: string | ArrayBuffer; headers?: Record<string, string> } = {}) {
 		if (key !== null) assertPlainKey(key);
-		return awsRequest({ config: this.credentials, service: "s3", host: this.host, path: key === null ? "/" : encodePath(key), ...init });
+		return awsRequest({ config: await this.credentials(), service: "s3", host: this.host, path: key === null ? "/" : encodePath(key), ...init });
 	}
 
 	private metadataHeaders(options?: PutOptions): Record<string, string> {

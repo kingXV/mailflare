@@ -1,3 +1,5 @@
+import type { AwsConfig } from "@/lib/aws/aws-types";
+
 /** Connection to an S3-compatible bucket: Backblaze B2 or AWS S3. The fields keep their B2 names. */
 export type B2Config = {
 	keyId: string;
@@ -7,6 +9,8 @@ export type B2Config = {
 	endpoint: string;
 	/** Signing region, the second label of the endpoint (us-west-004). */
 	region: string;
+	/** Rotating credentials (e.g. an ECS/Fargate task role); resolved per request instead of the static key pair. */
+	credentialsProvider?: () => Promise<AwsConfig>;
 };
 
 export type StorageStatus = {
