@@ -24,6 +24,14 @@ RUN npm prune --omit=dev --ignore-scripts \
 	&& rm -rf node_modules/wrangler node_modules/miniflare node_modules/workerd node_modules/@cloudflare node_modules/cloudflare node_modules/@aws-sdk node_modules/esbuild node_modules/@esbuild node_modules/typescript
 
 FROM base AS runtime
+# TLS roots: system CAs plus the AWS RDS global bundle, so `sslmode=require`
+# against RDS verifies. Download runs via node's own fetch in the same RUN as
+# apt-get, so a failed fetch breaks the build and no curl stays in the image.
+RUN apt-get update \
+	&& apt-get install -y --no-install-recommends ca-certificates \
+	&& node -e "fetch('https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem').then(r=>{if(!r.ok)throw new Error('rds bundle HTTP '+r.status);return r.arrayBuffer()}).then(b=>require('fs').writeFileSync('/etc/ssl/certs/rds-global-bundle.pem',Buffer.from(b))).catch(e=>{console.error(e);process.exit(1)})" \
+	&& rm -rf /var/lib/apt/lists/*
+ENV NODE_EXTRA_CA_CERTS=/etc/ssl/certs/rds-global-bundle.pem
 ENV NODE_ENV=production DATA_DIR=/data PORT=3000 SMTP_INBOUND_PORT=25
 COPY --chown=node:node --from=prod-deps /app/node_modules ./node_modules
 COPY --chown=node:node --from=build /app/.next-node ./.next-node
