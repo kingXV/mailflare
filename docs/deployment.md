@@ -103,6 +103,18 @@ Give me the deployed URL and any remaining Cloudflare account actions. I will
 open /setup, create the first admin account, and connect my domain there.
 ```
 
+## Deploy on AWS (ECS Fargate)
+
+Self-hosting on AWS is supported through a CDK stack that provisions a VPC, an RDS PostgreSQL 16 database, an S3 bucket, SQS queues with DLQs, an ALB with an ACM certificate and Route 53 DNS, and a single Fargate task running the Docker image. Deployment has three steps:
+
+```bash
+docker buildx build --platform linux/amd64 -t <ecr-uri>:latest . && docker push <ecr-uri>:latest
+cdk bootstrap
+cdk deploy -c hostedZoneId=<zone-id> -c appDomain=<appDomain> -c imageRepository=<ecr-uri>
+```
+
+After the stack deploys, open `https://<appDomain>/setup` to initialize the database and create the first admin account. Configure AWS credentials (on ECS the task role is picked up automatically, otherwise set them on the admin AWS card), then set up SES sending and receiving for each domain — the required DNS records are published automatically through the Route 53 seam. Queues can run SQS-backed when the stack-provided queue URLs are set; in-process queues remain the default. For the complete guide including limitations, see [deploy/aws/README.md](../deploy/aws/README.md).
+
 ## Manual deployment
 
 Install dependencies, configure the Cloudflare bindings in `wrangler.jsonc`, and run:
