@@ -9,6 +9,9 @@ export function getSetupRequirementChecks(env: CloudflareEnv): SetupRequirementC
 	const database = getDatabaseConfig(env);
 	if (isNodeRuntime(env)) {
 		const mailer = env.EMAIL as unknown as { configured?: boolean };
+		const awsEnv = env as Partial<Record<"AWS_ACCESS_KEY_ID" | "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI" | "RESEND_API_KEY", string>>;
+		const awsCredsDetected = !!awsEnv.AWS_ACCESS_KEY_ID?.trim() || !!awsEnv.AWS_CONTAINER_CREDENTIALS_RELATIVE_URI?.trim();
+		const resendConfigured = !!awsEnv.RESEND_API_KEY?.trim();
 		return [
 			{
 				key: "Database",
@@ -17,15 +20,23 @@ export function getSetupRequirementChecks(env: CloudflareEnv): SetupRequirementC
 			},
 			{
 				key: "Outbound mail",
-				configured: mailer?.configured === true,
-				message: "Set SMTP_URL, or CF_ACCOUNT_ID with CF_TOKEN to send through Cloudflare. Receiving works without it.",
+				configured: mailer?.configured === true || awsCredsDetected || resendConfigured,
+				message: mailer?.configured === true
+					? "Outbound mail goes through the configured SMTP_URL or Cloudflare mailer."
+					: awsCredsDetected
+						? "AWS/SES credentials detected; sending also needs a verified identity in a supported region."
+						: resendConfigured
+							? "RESEND_API_KEY is set; outbound mail goes through Resend."
+							: "Set SMTP_URL, or CF_ACCOUNT_ID with CF_TOKEN to send through Cloudflare. Receiving works without it.",
 			},
 			{
 				key: "Cloudflare API credentials (optional)",
 				configured: true,
 				message: hasCloudflareCredentials(env)
 					? "Domains are provisioned on Cloudflare automatically."
-					: "Not set: add MX and SPF records for each domain by hand, as shown on the domain page.",
+					: awsCredsDetected
+						? "Domains are provisioned on Route 53 automatically."
+						: "Not set: add MX and SPF records for each domain by hand, as shown on the domain page.",
 			},
 		];
 	}
