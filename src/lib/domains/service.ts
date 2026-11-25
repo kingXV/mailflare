@@ -22,8 +22,12 @@ import { findSendingSubdomain } from "@/lib/domains/sending-status";
 import { preflightDomain } from "@/lib/domains/preflight";
 import { normalizeHostname } from "@/lib/domains/utils";
 import { hasCloudflareCredentials } from "@/lib/runtime";
+import { getAwsConfig } from "@/lib/aws/config";
 import { createAuditLog } from "@/lib/mailboxes/audit";
 import { assertDomainRemovable, assertMxChangeAllowed, ForceDeleteConfirmError, forceCleanupMtaSts, type ForceCleanup, republishMtaStsAfterMxChange } from "@/lib/deliverability/mta-sts-guard";
+
+/** Route 53 zones are recorded app-side with an `r53:` prefix (same predicate as cloudflare-dns.ts). */
+const isRoute53Zone = (zoneId: string) => zoneId.startsWith("r53:");
 
 export type DomainDnsView = {
 	routing: { records: CfDnsRecord[]; missing: CfDnsRecord[]; status?: string };
@@ -59,23 +63,30 @@ export async function addDomainForUser(
 	}
 	// A re-add provisions the zone again (MX records, Email Routing, receiving provider), so it is an MX change like any other.
 	if (claimedHostname) await assertMxChangeAllowed(env, claimedHostname);
-	if (!options?.skipDns && hasCloudflareCredentials(env)) {
+	const skipDns = options?.skipDns === true;
+	// The zone preflight claims the zone before anything is provisioned. It runs for
+	// Cloudflare zones and, on AWS-only installs, for Route 53 hosted zones too
+	// (preflightDomain resolves those when Cloudflare credentials are absent).
+	let r53Zone = false;
+	if (!skipDns && (hasCloudflareCredentials(env) || (await getAwsConfig(env)) !== null)) {
 		const { zone } = await preflightDomain(env, normalizedHostname);
+		r53Zone = isRoute53Zone(zone.id);
 		const [claimedZone] = await db.select({ userId: domains.userId }).from(domains).where(and(
 			eq(domains.zoneId, zone.id),
 			ne(domains.userId, userId),
 		)).limit(1);
 		if (claimedZone) {
-			throw new Error("Cloudflare zone is already registered to another account");
+			throw new Error("Zone is already registered to another account");
 		}
 	}
 	// Email Routing is Cloudflare's way of receiving; another provider brings its own MX,
 	// which its setup in the domain page creates once credentials exist.
 	// A skipped-DNS domain is recorded only: nothing receives or sends until the operator picks providers.
-	const skipDns = options?.skipDns === true;
-	const receivingProvider = skipDns ? "none" : (options?.receivingProvider ?? "cloudflare");
+	// A Route 53 zone has neither Cloudflare feature: SES is this stack's native provider there.
+	const defaultProvider = r53Zone ? ("ses" as const) : ("cloudflare" as const);
+	const receivingProvider = skipDns ? "none" : (options?.receivingProvider ?? defaultProvider);
 	// Cloudflare's sending subdomain is only provisioned when Cloudflare is the sender.
-	const requestedSending = skipDns ? "none" : (options?.sendingProvider ?? (options?.enableSending === false ? "none" : "cloudflare"));
+	const requestedSending = skipDns ? "none" : (options?.sendingProvider ?? (options?.enableSending === false ? "none" : defaultProvider));
 	const provisioned = await provisionDomainOnCloudflare(env, hostname, {
 		...options,
 		enableSending: requestedSending === "cloudflare",
@@ -103,7 +114,7 @@ export async function addDomainForUser(
 			routingStatus: provisioned.routingStatus ?? null,
 			sendingSubdomainTag: provisioned.sendingSubdomainTag,
 			sendingRequested: skipDns ? false : provisioned.sendingRequested,
-			...(skipDns ? { sendingProvider: "none" as const } : options?.sendingProvider ? { sendingProvider: options.sendingProvider } : existing && existing.sendingProvider !== "none" ? {} : { sendingProvider: provisioned.sendingRequested ? ("cloudflare" as const) : ("none" as const) }),
+			...(skipDns ? { sendingProvider: "none" as const } : options?.sendingProvider ? { sendingProvider: options.sendingProvider } : existing && existing.sendingProvider !== "none" ? {} : { sendingProvider: requestedSending === "none" ? ("none" as const) : defaultProvider }),
 			sendingEnabled: skipDns ? false : provisioned.sendingEnabled,
 			routingEnabled: skipDns ? false : provisioned.routingEnabled,
 			dnsSkipped: options?.skipDns === true,
@@ -233,29 +244,33 @@ export async function removeDomainForUser(
 		await assertDomainRemovable(env, domain);
 	}
 
-	try {
-		await deleteEmailRoutingRulesForDomain(env, domain.zoneId, domain.hostname);
-	} catch (err) {
-		console.warn("deleteEmailRoutingRulesForDomain", err);
-	}
-
-	const [otherDomainOnZone] = await db.select({ id: domains.id }).from(domains).where(and(
-		eq(domains.zoneId, domain.zoneId),
-		ne(domains.id, domainId),
-	)).limit(1);
-	if (domain.routingEnabled && !otherDomainOnZone) {
+	// Route 53 zones have no Cloudflare Email Routing or sending subdomain to tear
+	// down; their MX/DKIM records still clear through the DNS seam (it dispatches to Route 53).
+	if (!isRoute53Zone(domain.zoneId)) {
 		try {
-			await disableEmailRouting(env, domain.zoneId);
+			await deleteEmailRoutingRulesForDomain(env, domain.zoneId, domain.hostname);
 		} catch (err) {
-			console.warn("disableEmailRouting", err);
+			console.warn("deleteEmailRoutingRulesForDomain", err);
 		}
-	}
 
-	if (domain.sendingSubdomainTag) {
-		try {
-			await deleteSendingSubdomain(env, domain.zoneId, domain.sendingSubdomainTag);
-		} catch (err) {
-			console.warn("deleteSendingSubdomain", err);
+		const [otherDomainOnZone] = await db.select({ id: domains.id }).from(domains).where(and(
+			eq(domains.zoneId, domain.zoneId),
+			ne(domains.id, domainId),
+		)).limit(1);
+		if (domain.routingEnabled && !otherDomainOnZone) {
+			try {
+				await disableEmailRouting(env, domain.zoneId);
+			} catch (err) {
+				console.warn("disableEmailRouting", err);
+			}
+		}
+
+		if (domain.sendingSubdomainTag) {
+			try {
+				await deleteSendingSubdomain(env, domain.zoneId, domain.sendingSubdomainTag);
+			} catch (err) {
+				console.warn("deleteSendingSubdomain", err);
+			}
 		}
 	}
 
