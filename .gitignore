@@ -66,3 +66,7 @@ mailflare-landing
 skills-lock.json
 /dist/
 /tests/.tmp-*
+
+# aws cdk synth artifacts
+/deploy/aws/cdk.out/
+/deploy/aws/cdk.context.json
