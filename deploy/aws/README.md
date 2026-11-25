@@ -42,6 +42,12 @@ Optional: embed the client-side Turnstile key at build time with
 `--build-arg NEXT_PUBLIC_TURNSTILE_SITE_KEY=...`; the server-side value is set
 at deploy time via `-c turnstileSiteKey=...`.
 
+The image also bundles the AWS RDS TLS trust store: the Dockerfile fetches
+`https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem` at build
+time, installs it at `/etc/ssl/certs/rds-global-bundle.pem` and sets
+`NODE_EXTRA_CA_CERTS` to it, so `DATABASE_URL=...?sslmode=require` verifies
+against RDS out of the box.
+
 ## 2. Bootstrap CDK (once per account/region)
 
 ```sh
@@ -104,6 +110,13 @@ Deploy outputs: `InboundQueueUrl`, `OutboundQueueUrl`, `AgentQueueUrl`,
   request production access before sending real outbound mail.
 - **No direct SMTP inbound.** The stack sets `SMTP_INBOUND_PORT=0`; inbound
   mail arrives via SES receipt rules instead of the built-in SMTP listener.
+- **SES receiving regions are gated twice.** `cdk synth` warns via a region
+  list in `deploy/aws/app.ts`, while in-app setup enforces its own
+  `SES_RECEIVING_REGIONS` in `src/lib/aws/config.ts`; the two lists currently
+  differ (for example `eu-west-3`, `eu-north-1` and `il-central-1` are allowed
+  by `app.ts` but not by `config.ts`, while `ap-northeast-1` and
+  `us-gov-west-1` are the reverse), so a region that passes synth can still be
+  rejected by in-app setup. Reconciling the lists is a code follow-up.
 
 ## Environment and secrets reference
 
@@ -119,7 +132,9 @@ Set by the stack on the Fargate task:
 | `APP_URL` | `https://<appDomain>` |
 | `S3_BUCKET` / `S3_REGION` | stack bucket / deploy region (object storage via the S3 seam) |
 | `DATA_DIR` | `/tmp/mailflare-data` (ephemeral task storage; durable data lives in RDS/S3) |
-| `SQS_INBOUND_QUEUE_URL` / `SQS_OUTBOUND_QUEUE_URL` / `SQS_AGENT_QUEUE_URL` | stack queues |
+| `SQS_INBOUND_QUEUE_URL` / `SQS_OUTBOUND_QUEUE_URL` | stack queues (durable SQS instead of in-process queues) |
+| `SQS_AGENT_QUEUE_URL` | stack agent queue — **currently inert**: the runtime reads `AGENT_QUEUE_URL` for the agent queue (`server/runtime/env.ts`), so until the names are reconciled the agent queue still runs in-process |
+| `AWS_SESSION_TOKEN` / `AWS_CONTAINER_CREDENTIALS_RELATIVE_URI` | set automatically by ECS for the task role; consumed by the task-role credential chain in `src/lib/aws/config.ts` (saved settings → env → task role) |
 | `TURNSTILE_SITE_KEY` | set only when `-c turnstileSiteKey=` was passed |
 
 Injected secrets: `DATABASE_URL` comes from the Secrets Manager secret
