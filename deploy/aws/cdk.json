@@ -1,0 +1,9 @@
+{
+	"app": "npx tsx app.ts",
+	"context": {
+		"appDomain": "mail.example.com",
+		"imageRepository": "public.ecr.aws/docker/library/busybox:latest",
+		"multiAz": false,
+		"vpcEndpoints": false
+	}
+}
