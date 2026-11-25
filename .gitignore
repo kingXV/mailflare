@@ -70,3 +70,4 @@ skills-lock.json
 # aws cdk synth artifacts
 /deploy/aws/cdk.out/
 /deploy/aws/cdk.context.json
+/deploy/aws/node_modules/
