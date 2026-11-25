@@ -119,6 +119,19 @@ Add your Cloudflare credentials to `.dev.vars`, then open [localhost:3000](http:
 
 A schema change needs a migration for each database type. See [Databases](docs/databases.md#migrations).
 
+### Deploy on AWS (ECS Fargate)
+
+Runs on ECS Fargate behind an ALB, with RDS PostgreSQL/MySQL, S3 storage and SQS queues, provisioned with CDK.
+
+```bash
+docker build -t ${IMAGE_URI} . && docker push ${IMAGE_URI}
+cd deploy/aws
+cdk bootstrap aws://${AWS_ACCOUNT_ID}/${AWS_DEFAULT_REGION}
+cdk deploy -c hostedZoneId=<your-real-zone-id> -c appDomain=mail.example.com -c imageRepository=${IMAGE_URI}
+```
+
+Email is delivered with Amazon SES (check the supported receiving regions first). See [deploy/aws](deploy/aws/README.md).
+
 ## Documentation
 
 - [Deployment and configuration](docs/deployment.md)
