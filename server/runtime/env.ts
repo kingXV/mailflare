@@ -1,11 +1,13 @@
 import { mkdirSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { getDatabaseConfig, withDatabase } from "@/db/with-database";
+import { getAwsConfig } from "@/lib/aws/config";
+import type { AwsConfig } from "@/lib/aws/aws-types";
 import { withStorage } from "@/lib/storage";
 import { openFileBucket } from "./file-bucket";
 import { openMailer, type Mailer, type MailerConfig } from "./mailer";
 import { openAssets, openRateLimiter } from "./misc";
-import { openQueue, type InProcessQueue } from "./queue";
+import { openQueue, openSqsQueue, type InProcessQueue } from "./queue";
 import { RealtimeHubRegistry } from "./realtime";
 import { openSqliteDatabase, type SqliteDatabase } from "./sqlite-database";
 import type { NodeRuntime } from "./types";
@@ -37,9 +39,22 @@ export function createNodeRuntime(): NodeRuntime {
 	const database = getDatabaseConfig({}).driver === "d1" ? openSqliteDatabase(join(dataDir, "mailflare.sqlite")) : undefined;
 	const bucket = openFileBucket(join(dataDir, "blobs"));
 	const mailer = openMailer(mailerConfig());
-	const inboundQueue = openQueue("mailflare-inbound");
-	const outboundQueue = openQueue("mailflare-outbound");
-	const agentQueue = openQueue("mailflare-agent");
+	// SQS_*_QUEUE_URL (Fargate/ECS) moves a queue to SQS; without a URL the in-process default
+	// stays. The AWS config provider is lazy - it only runs once `env` exists and a queue is
+	// actually used, so assembling the runtime resolves no credentials and opens no connections.
+	const sqsConfig = () => getAwsConfig(env) as Promise<AwsConfig>;
+	const inboundQueueUrl = optional("SQS_INBOUND_QUEUE_URL");
+	const outboundQueueUrl = optional("SQS_OUTBOUND_QUEUE_URL");
+	const agentQueueUrl = optional("AGENT_QUEUE_URL");
+	const inboundQueue = inboundQueueUrl
+		? openSqsQueue("mailflare-inbound", inboundQueueUrl, sqsConfig, { maxRetries: 12 })
+		: openQueue("mailflare-inbound");
+	const outboundQueue = outboundQueueUrl
+		? openSqsQueue("mailflare-outbound", outboundQueueUrl, sqsConfig, { maxRetries: 12 })
+		: openQueue("mailflare-outbound");
+	const agentQueue = agentQueueUrl
+		? openSqsQueue("mailflare-agent", agentQueueUrl, sqsConfig, { maxRetries: 12 })
+		: openQueue("mailflare-agent");
 	const realtime = new RealtimeHubRegistry();
 	const publicDir = resolve(optional("PUBLIC_DIR") ?? "./public");
 
@@ -99,6 +114,9 @@ export function createNodeRuntime(): NodeRuntime {
 		AWS_SECRET_ACCESS_KEY: optional("AWS_SECRET_ACCESS_KEY"),
 		AWS_REGION: optional("AWS_REGION"),
 		AWS_DEFAULT_REGION: optional("AWS_DEFAULT_REGION"),
+		// Task-role credentials on Fargate/ECS: the resolver in src/lib/aws/config.ts reads both.
+		AWS_SESSION_TOKEN: optional("AWS_SESSION_TOKEN"),
+		AWS_CONTAINER_CREDENTIALS_RELATIVE_URI: optional("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI"),
 		CF_ACCOUNT_ID: optional("CF_ACCOUNT_ID"),
 		SPAMHAUS_DQS_KEY: optional("SPAMHAUS_DQS_KEY"),
 		ABUSECH_AUTH_KEY: optional("ABUSECH_AUTH_KEY"),
