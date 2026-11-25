@@ -156,7 +156,7 @@ and the DNS page shows what to set by hand.
 | `RESEND_CUSTOM_MESSAGE_ID` | `true` | Set to `false` for a Resend-compatible service that refuses a custom `Message-ID` header |
 | `RESEND_OMIT_HEADERS` | empty | Comma-separated headers left out of Resend sends, for a compatible service that refuses them (e.g. `Auto-Submitted`) |
 | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION`, `AWS_SESSION_TOKEN` | unset | Amazon SES credentials, used when none are saved in the app. Credentials resolve in order: saved settings → environment → ECS task role (`AWS_CONTAINER_CREDENTIALS_RELATIVE_URI`, set automatically by ECS). See [deploy/aws/README.md](../deploy/aws/README.md) for the ECS setup |
-| `SQS_INBOUND_QUEUE_URL`, `SQS_OUTBOUND_QUEUE_URL`, `SQS_AGENT_QUEUE_URL` | unset | Run queues on durable SQS instead of in-process (URLs come from the CDK stack in deploy/aws). SQS queues are SSE-encrypted, since import jobs carry IMAP passwords |
+| `SQS_INBOUND_QUEUE_URL`, `SQS_OUTBOUND_QUEUE_URL`, `AGENT_QUEUE_URL` | unset | Run queues on durable SQS instead of in-process (URLs come from the CDK stack in deploy/aws). SQS queues are SSE-encrypted, since import jobs carry IMAP passwords |
 | `INBOUND_WEBHOOK_SECRET` | unset | Enables `/api/inbound` for the relay Worker |
 | `INBOUND_REQUIRE_SIGNED_HEADERS` | unset | Set to `1` once the relay Worker is updated: refuses relays that do not sign the header map with a timestamp (older relays stay accepted without it, and their requests can be replayed) |
 | `TURNSTILE_SECRET_KEY` | unset | Bot protection on login and reset forms (`NEXT_PUBLIC_TURNSTILE_SITE_KEY` at build time) |
